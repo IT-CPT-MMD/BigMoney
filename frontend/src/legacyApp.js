@@ -1,5 +1,5 @@
 // BM Core API client. Database access is now handled by the Node/Express backend.
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8080").replace(/\/$/, "");
+const API_BASE_URL = (import.meta.env.VITE_API_URL || "http://localhost:8080").replace(/\/$/, "");
 
 function authToken() {
   return localStorage.getItem("bm_token") || "";
