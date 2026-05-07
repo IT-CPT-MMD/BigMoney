@@ -21,6 +21,13 @@ const supabase = createClient(SUPABASE_URL || 'http://localhost:54321', SUPABASE
   auth: { persistSession: false }
 });
 
+const cors = require("cors");
+
+app.use(cors({
+  origin: process.env.FRONTEND_ORIGIN || "http://localhost:5173",
+  credentials: true
+}));
+
 const app = express();
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({ origin: FRONTEND_ORIGIN === '*' ? true : FRONTEND_ORIGIN, credentials: true }));
