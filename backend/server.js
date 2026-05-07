@@ -17,20 +17,21 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.warn('WARNING: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing. Add them to backend/.env');
 }
 
-const supabase = createClient(SUPABASE_URL || 'http://localhost:54321', SUPABASE_SERVICE_ROLE_KEY || 'missing', {
-  auth: { persistSession: false }
-});
-
-const cors = require("cors");
-
-app.use(cors({
-  origin: process.env.FRONTEND_ORIGIN || "http://localhost:5173",
-  credentials: true
-}));
+const supabase = createClient(
+  SUPABASE_URL || 'http://localhost:54321',
+  SUPABASE_SERVICE_ROLE_KEY || 'missing',
+  {
+    auth: { persistSession: false }
+  }
+);
 
 const app = express();
+
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors({ origin: FRONTEND_ORIGIN === '*' ? true : FRONTEND_ORIGIN, credentials: true }));
+app.use(cors({
+  origin: FRONTEND_ORIGIN === '*' ? true : FRONTEND_ORIGIN,
+  credentials: true
+}));
 app.use(express.json({ limit: '10mb' }));
 app.use(morgan('dev'));
 
