@@ -1,0 +1,37 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // NOTE: Because this project uses custom username/password stored in Firestore
+    // and NOT Firebase Authentication, strong Firestore security rules are limited.
+    // For production, upgrade to Firebase Auth or Cloud Functions.
+
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    match /transactions/{orderId} {
+      allow read, write: if true;
+    }
+
+    match /platforms/{platformId} {
+      allow read, write: if true;
+    }
+
+    match /riskReports/{id} {
+      allow read, write: if true;
+    }
+
+    match /orderReservations/{id} {
+      allow read, write: if true;
+    }
+
+    match /limits/{id} {
+      allow read, write: if true;
+    }
+
+    match /auditLogs/{id} {
+      allow read, write: if true;
+    }
+  }
+}

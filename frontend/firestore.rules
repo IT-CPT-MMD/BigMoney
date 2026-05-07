@@ -1,0 +1,11 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Starter rules for this username/password Firestore login system.
+    // IMPORTANT: This allows public read/write. Use only for private/internal testing.
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}
