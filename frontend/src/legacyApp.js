@@ -1,23 +1,59 @@
 // BM Core API client. Database access is now handled by the Node/Express backend.
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8080").replace(/\/$/, "");
+const API_BASE_URL = (
+  import.meta.env.VITE_API_URL ||
+  import.meta.env.VITE_API_BASE_URL ||
+  "https://bigmoney-x3q7.onrender.com"
+).replace(/\/$/, "");
+
+console.log("API_BASE_URL =", API_BASE_URL);
 
 function authToken() {
   return localStorage.getItem("bm_token") || "";
 }
+
 async function apiRequest(path, options = {}) {
-  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  const headers = {
+    "Content-Type": "application/json",
+    ...(options.headers || {})
+  };
+
   const token = authToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(`${API_BASE_URL}${path}`, { ...options, headers });
-  const text = await res.text();
-  let payload = null;
-  try { payload = text ? JSON.parse(text) : null; } catch { payload = { message: text }; }
-  if (!res.ok) {
-    const err = new Error(payload?.message || payload?.error || `API error ${res.status}`);
-    err.status = res.status; err.payload = payload; throw err;
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
   }
+
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    ...options,
+    headers
+  });
+
+  const text = await res.text();
+
+  let payload = null;
+
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = { message: text };
+  }
+
+  if (!res.ok) {
+    const err = new Error(
+      payload?.message ||
+      payload?.error ||
+      `API error ${res.status}`
+    );
+
+    err.status = res.status;
+    err.payload = payload;
+
+    throw err;
+  }
+
   return payload;
 }
+
 const app = { apiBaseUrl: API_BASE_URL };
 const db = app;
 
