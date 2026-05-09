@@ -1,0 +1,1 @@
+Dashboard 100-record limit fixed. Updated frontend/src/legacyApp.js, frontend/dist compiled JS, and backend/server.js. Dashboard now requests up to 5000 records and backend fetches filtered records in batches up to 10000 max.

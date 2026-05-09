@@ -17,26 +17,31 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.warn('WARNING: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing. Add them to backend/.env');
 }
 
-const supabase = createClient(
-  SUPABASE_URL || 'http://localhost:54321',
-  SUPABASE_SERVICE_ROLE_KEY || 'missing',
-  {
-    auth: { persistSession: false }
-  }
-);
+const supabase = createClient(SUPABASE_URL || 'http://localhost:54321', SUPABASE_SERVICE_ROLE_KEY || 'missing', {
+  auth: { persistSession: false }
+});
 
 const app = express();
-
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors({
-  origin: FRONTEND_ORIGIN === '*' ? true : FRONTEND_ORIGIN,
-  credentials: true
-}));
+app.use(cors({ origin: FRONTEND_ORIGIN === '*' ? true : FRONTEND_ORIGIN, credentials: true }));
 app.use(express.json({ limit: '10mb' }));
 app.use(morgan('dev'));
 
 const TABLES = new Set(['users', 'platforms', 'transactions', 'riskReports', 'orderReservations']);
 const DEFAULT_PLATFORM_ID = '4-2';
+const MAX_API_LIMIT = 10000;
+const DEFAULT_API_LIMIT = 5000;
+const SUPABASE_MAX_RANGE = 1000;
+
+function clampLimit(value, fallback = DEFAULT_API_LIMIT) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(Math.max(Math.trunc(n), 1), MAX_API_LIMIT);
+}
+
+function makePlatformSet(platforms = []) {
+  return new Set(Array.isArray(platforms) ? platforms.map(normalizePlatform) : []);
+}
 
 function assertTable(table) {
   if (!TABLES.has(table)) {
@@ -234,11 +239,39 @@ app.delete('/api/docs/:table/:id', requireAuth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+
+async function fetchFilteredRows(table, { limit = DEFAULT_API_LIMIT, orderColumn = 'updated_at', pageSize = SUPABASE_MAX_RANGE, applyFilter = () => true, mapRow = null } = {}) {
+  const maxLimit = clampLimit(limit);
+  const batchSize = Math.min(clampLimit(pageSize, SUPABASE_MAX_RANGE), SUPABASE_MAX_RANGE);
+  const out = [];
+  let from = 0;
+
+  while (out.length < maxLimit) {
+    const { data, error } = await supabase
+      .from(table)
+      .select('*')
+      .order(orderColumn, { ascending: false })
+      .range(from, from + batchSize - 1);
+    if (error) throw error;
+
+    const rows = data || [];
+    for (const row of rows) {
+      const mapped = mapRow ? mapRow(row) : row;
+      if (applyFilter(mapped, row)) out.push(mapped);
+      if (out.length >= maxLimit) break;
+    }
+
+    if (rows.length < batchSize) break;
+    from += batchSize;
+  }
+  return out;
+}
+
 app.get('/api/collections/:table', requireAuth, async (req, res, next) => {
   try {
     const { table } = req.params;
     assertTable(table);
-    const limit = Math.min(Number(req.query.limit || 100), 1000);
+    const limit = clampLimit(req.query.limit);
     let query = supabase.from(table).select('*');
     if (table === 'transactions' || table === 'riskReports') {
       const platformId = normalizePlatform(req.query.platformId || 'all');
@@ -246,26 +279,28 @@ app.get('/api/collections/:table', requireAuth, async (req, res, next) => {
       const dateFrom = String(req.query.dateFrom || '');
       const dateTo = String(req.query.dateTo || '');
       const statusFilter = String(req.query.status || '').toUpperCase();
-      // Most migrated data is inside jsonb data, so filtering is safely finalized after query.
-      // Fetch a little extra because date/status/platform filters can live inside jsonb data.
-      query = query.order('updated_at', { ascending: false }).limit(Math.max(limit * 6, 200));
-      const { data, error } = await query;
-      if (error) throw error;
-      const filtered = (data || []).filter(row => {
-        const d = rowData(row);
-        if (d.deleted) return false;
-        if (platformId && platformId !== 'all' && normalizePlatform(d.platformId || d.platformCode) !== platformId) return false;
-        if (date && d.date !== date) return false;
-        if (dateFrom && (!d.date || d.date < dateFrom)) return false;
-        if (dateTo && (!d.date || d.date > dateTo)) return false;
-        if (statusFilter && String(d.status || '').toUpperCase() !== statusFilter) return false;
-        if (normalizeRole(req.user.role) === 'qa') {
-          const allowed = req.user.allowedPlatforms || [];
-          if (!allowed.includes('all') && !allowed.includes(normalizePlatform(d.platformId || d.platformCode))) return false;
-          if (table === 'transactions' && d.createdBy && d.createdBy !== req.user.username && d.qaUser !== req.user.username) return false;
+      // Most migrated data is inside jsonb data, so filtering is finalized after query.
+      // Fetch in batches so Dashboard/History are not cut at the first 100 records.
+      const role = normalizeRole(req.user.role);
+      const allowedSet = makePlatformSet(req.user.allowedPlatforms || []);
+      const filtered = await fetchFilteredRows(table, {
+        limit,
+        applyFilter: (_row, rawRow) => {
+          const d = rowData(rawRow);
+          if (d.deleted) return false;
+          const rowPlatform = normalizePlatform(d.platformId || d.platformCode);
+          if (platformId && platformId !== 'all' && rowPlatform !== platformId) return false;
+          if (date && d.date !== date) return false;
+          if (dateFrom && (!d.date || d.date < dateFrom)) return false;
+          if (dateTo && (!d.date || d.date > dateTo)) return false;
+          if (statusFilter && String(d.status || '').toUpperCase() !== statusFilter) return false;
+          if (role === 'qa') {
+            if (!allowedSet.has('all') && !allowedSet.has(rowPlatform)) return false;
+            if (table === 'transactions' && d.createdBy && d.createdBy !== req.user.username && d.qaUser !== req.user.username) return false;
+          }
+          return true;
         }
-        return true;
-      }).slice(0, limit);
+      });
       return res.json({ data: filtered });
     }
     query = query.order('updated_at', { ascending: false }).limit(limit);
@@ -279,27 +314,46 @@ app.get('/api/dashboard', requireAuth, async (req, res, next) => {
   try {
     const platformId = normalizePlatform(req.query.platformId || DEFAULT_PLATFORM_ID);
     const date = String(req.query.date || new Date().toISOString().slice(0, 10));
-    const { data, error } = await supabase.from('transactions').select('*').order('updated_at', { ascending: false }).limit(2000);
-    if (error) throw error;
-    const records = (data || []).map(rowData).filter(t => {
-      if (t.deleted) return false;
-      if (platformId !== 'all' && normalizePlatform(t.platformId || t.platformCode) !== platformId) return false;
-      if (date && t.date !== date) return false;
-      if (normalizeRole(req.user.role) === 'qa' && t.createdBy && t.createdBy !== req.user.username && t.qaUser !== req.user.username) return false;
-      return true;
+    const requestedLimit = clampLimit(req.query.limit);
+    const role = normalizeRole(req.user.role);
+    const rows = await fetchFilteredRows('transactions', {
+      limit: requestedLimit,
+      mapRow: rowData,
+      applyFilter: (t) => {
+        if (t.deleted) return false;
+        if (platformId !== 'all' && normalizePlatform(t.platformId || t.platformCode) !== platformId) return false;
+        if (date && t.date !== date) return false;
+        if (role === 'qa' && t.createdBy && t.createdBy !== req.user.username && t.qaUser !== req.user.username) return false;
+        return true;
+      }
     });
+
     const summary = {
       date,
       platformId,
-      totalPaid: records.reduce((s, t) => s + Number(t.paidAmount || 0), 0),
-      pendingBalance: records.filter(t => t.status === 'PENDING').reduce((s, t) => s + Number(t.pendingBalance || 0), 0),
-      overpaidAmount: records.reduce((s, t) => s + Number(t.overpaidAmount || 0), 0),
-      records: records.length,
-      done: records.filter(t => t.status === 'DONE').length,
-      pending: records.filter(t => t.status === 'PENDING').length,
-      overpaid: records.filter(t => t.status === 'OVERPAID').length
+      totalPaid: 0,
+      pendingBalance: 0,
+      overpaidAmount: 0,
+      records: rows.length,
+      done: 0,
+      pending: 0,
+      overpaid: 0
     };
-    res.json({ summary, records: records.slice(0, Math.min(Number(req.query.limit || 20), 100)) });
+
+    for (const t of rows) {
+      summary.totalPaid += Number(t.paidAmount || 0);
+      summary.overpaidAmount += Number(t.overpaidAmount || 0);
+      if (t.status === 'PENDING') {
+        summary.pending += 1;
+        summary.pendingBalance += Number(t.pendingBalance || 0);
+      } else if (t.status === 'DONE') {
+        summary.done += 1;
+      } else if (t.status === 'OVERPAID') {
+        summary.overpaid += 1;
+      }
+    }
+
+    res.json({ summary, records: rows });
   } catch (err) { next(err); }
 });
 
@@ -308,8 +362,11 @@ app.post('/api/admin/bulk-delete', requireAuth, requireAdminOrEditor, async (req
     if (normalizeRole(req.user.role) !== 'admin') return res.status(403).json({ message: 'Only admin can bulk delete' });
     const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
     if (!ids.length) return res.status(400).json({ message: 'No ids provided' });
-    const { error } = await supabase.from('transactions').delete().in('id', ids);
-    if (error) throw error;
+    for (let i = 0; i < ids.length; i += 500) {
+      const chunk = ids.slice(i, i + 500);
+      const { error } = await supabase.from('transactions').delete().in('id', chunk);
+      if (error) throw error;
+    }
     res.json({ ok: true, deleted: ids.length });
   } catch (err) { next(err); }
 });
