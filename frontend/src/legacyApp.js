@@ -1,5 +1,5 @@
 // BM Core API client. Database access is now handled by the Node/Express backend.
-const API_BASE_URL = (import.meta.env.VITE_API_URL || "http://localhost:8080").replace(/\/$/, "");
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8080").replace(/\/$/, "");
 
 function authToken() {
   return localStorage.getItem("bm_token") || "";
@@ -148,7 +148,7 @@ async function getDocs(colRef) {
     params.set("platformId", selectedPlatformId || "all");
     if (currentPage === "dashboard") {
       params.set("date", $("dashboardDate")?.value || todayISO());
-      params.set("limit", "100");
+      params.set("limit", "5000");
     } else if (currentPage === "history") {
       const date = $("historyDate")?.value || "";
       if (date) params.set("date", date);
@@ -347,7 +347,7 @@ function changePlatform(id) {
   selectedPlatformId = canAccessPlatform(id) ? id : DEFAULT_PLATFORM_ID;
   localStorage.setItem("bm_selected_platform", selectedPlatformId);
   populatePlatformSelects();
-  loadTransactionsOnce().catch(err => console.warn("Platform refresh failed", err));
+  refreshCurrentPageWithLoader("Loading data...").catch(err => console.warn("Platform refresh failed", err));
   if (currentPage === "users") loadUsersOnce().catch(err => console.warn("User refresh failed", err));
   if (currentPage === "risk") loadRisksOnce().catch(err => console.warn("Risk refresh failed", err));
   renderPlatformManagement();
@@ -478,7 +478,13 @@ function toast(msg, type = "success") {
   root.appendChild(el);
   setTimeout(() => { el.style.opacity = "0"; el.style.transform = "translateX(20px)"; setTimeout(() => el.remove(), 250); }, 3800);
 }
-function loader(show) { const l = $("pageLoader"); if (l) l.classList.toggle("hidden", !show); }
+function loader(show, text = "Processing...") {
+  const l = $("pageLoader");
+  if (!l) return;
+  const label = l.querySelector(".loader-card span");
+  if (label) label.textContent = text;
+  l.classList.toggle("hidden", !show);
+}
 function setButtonLoading(btn, show) {
   if (!btn) return;
   if (show) btn.dataset.loading = "true"; else delete btn.dataset.loading;
@@ -588,8 +594,8 @@ if (isApp) {
   });
   if (userRole() === "editor" && $("newRole")) { $("newRole").value = "qa"; $("newRole").disabled = true; }
   $("exportCsvBtn")?.addEventListener("click", exportCSV);
-  $("dashboardDate")?.addEventListener("change", () => { dashboardPage = 1; renderDashboard(); });
-  $("dashboardTodayBtn")?.addEventListener("click", () => { $("dashboardDate").value = todayISO(); dashboardPage = 1; renderDashboard(); });
+  $("dashboardDate")?.addEventListener("change", () => { dashboardPage = 1; refreshCurrentPageWithLoader("Loading dashboard data...").catch(err => console.warn("Dashboard date load failed", err)); });
+  $("dashboardTodayBtn")?.addEventListener("click", () => { $("dashboardDate").value = todayISO(); dashboardPage = 1; refreshCurrentPageWithLoader("Loading dashboard data...").catch(err => console.warn("Dashboard today load failed", err)); });
   $("historyTodayBtn")?.addEventListener("click", () => { $("historyDate").value = todayISO(); historyPage = 1; loadTransactionsOnce().then(renderHistory); });
   $("historySearchBtn")?.addEventListener("click", () => { historyPage = 1; loadTransactionsOnce().then(renderHistory); });
   $("historySearch")?.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("historySearchBtn")?.click(); } });
@@ -1064,6 +1070,18 @@ async function bootData() {
     toast("Database load failed. Check Supabase setup and anon key.", "error");
   }
 }
+async function refreshCurrentPageWithLoader(message = "Loading data...") {
+  loader(true, message);
+  try {
+    await loadTransactionsOnce();
+    if (currentPage === "dashboard") renderDashboard();
+    if (currentPage === "history") renderHistory();
+    if (currentPage === "limits") renderLimits();
+  } finally {
+    loader(false);
+  }
+}
+
 async function loadTransactionsOnce() {
   if (dataLoadInProgress) return;
   dataLoadInProgress = true;
